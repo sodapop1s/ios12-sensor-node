@@ -54,6 +54,7 @@ Mosquitto 2.0.21 on Debian 13.**
 | Everything restarts after a reboot + re-jailbreak with no manual step | verified once (launchd jobs came up, ~3 min of data gap, no history lost) |
 | Sound level | works; **not yet verified to survive a reboot** (the program keeps publishing the rest if the mic is unavailable) |
 | Offline alert (Telegram) | tested end to end with the real phone: one OFFLINE message after about 2 minutes of silence, one BACK ONLINE message with the duration |
+| Heat alert (Telegram) | simulated heat wave and a live test with the real phone both produced the expected message (WARNING, CRITICAL, cleared). **The default limits are judgment calls, not tested thresholds.** |
 | Power-loss recovery | **not automatic.** The phone is semi-tethered; see [`docs/POWER_LOSS.md`](docs/POWER_LOSS.md). The hardware part is untested. |
 | Other phones / iOS versions | not tested. The HID usage numbers are specific to what this phone reported. |
 
@@ -98,7 +99,15 @@ with the message as its last argument; the included `hub/notify_telegram.py` pos
 3. Re-run `hub/install-hub.sh`; it restarts the service with `HUB_NOTIFY_CMD` set.
 
 `notify-telegram "any text"` also works for any other job on the server. With no `HUB_NOTIFY_CMD` the alerts only go
-to the journal. The alert text contains no sensor values.
+to the journal. The offline messages contain no sensor values; the heat messages include the temperature that tripped them.
+
+**Heat alerts.** The hub watches the temperature fields of every reading. Defaults (in C, `[warning, critical]`):
+battery gauge `[45, 55]`, SoC and TCC `[85, 95]`, charger junction `[85, 95]`. A reading must stay over a limit for
+`HUB_HEAT_SUSTAIN_S` seconds (default 60) before anything is sent, and must fall `HUB_HEAT_HYST_C` (default 3) below it
+for that long before it is declared cleared. Reminders: every 2 h while warning, every 30 min while critical.
+Override with `HUB_HEAT_RULES='{"gas gauge battery":[42,50]}'` in the service environment. These numbers are judgment
+calls from one phone that normally sits at 36-42 C (battery gauge) on USB power, not tested limits: tune them.
+The dashboard header shows a HEAT pill while any sensor is over a limit.
 
 ## Message format
 

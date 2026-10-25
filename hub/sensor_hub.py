@@ -21,6 +21,14 @@ ALERT_AFTER = float(os.environ.get("HUB_ALERT_AFTER_S", "120"))        # seconds
 ALERT_REPEAT_H = float(os.environ.get("HUB_ALERT_REPEAT_H", "6"))      # reminder interval while still offline
 NAME = os.environ.get("HUB_NODE_NAME", "iPhone sensor node")
 alert = {"down_since": None, "last_sent": 0.0}
+# heat alerts: {sensor name: [warn C, critical C]}; a reading must stay over a threshold HEAT_SUSTAIN_S seconds to count
+HEAT_RULES = json.loads(os.environ.get("HUB_HEAT_RULES", json.dumps({
+    "gas gauge battery": [45, 55], "Max: TCC Temp Sensor2": [85, 95],
+    "Max: PMGR SOC Die Temp Sensor0": [85, 95], "Charger tjunc": [85, 95]})))
+HEAT_SUSTAIN_S = float(os.environ.get("HUB_HEAT_SUSTAIN_S", "60"))
+HEAT_HYST_C = float(os.environ.get("HUB_HEAT_HYST_C", "3"))
+HEAT_REPEAT_S = {1: float(os.environ.get("HUB_HEAT_REPEAT_WARN_H", "2")) * 3600, 2: float(os.environ.get("HUB_HEAT_REPEAT_CRIT_MIN", "30")) * 60}
+heat = {}   # sensor -> {"level": 0|1|2, "since": ts the candidate level began, "cand": level, "last_sent": ts}
 lock = threading.Lock()
 state = {"status": "unknown", "status_ts": 0.0, "last_state_ts": 0.0}
 
@@ -46,10 +54,14 @@ def store(topic, payload):
         return
     if topic.endswith("/state"):
         try:
-            json.loads(payload)
+            parsed = json.loads(payload)
         except ValueError:
             return
         state["last_state_ts"] = now
+        try:
+            heat_check(parsed, now)
+        except Exception as e:
+            print("heat check error:", type(e).__name__, e, flush=True)
         with lock:
             c = db(); c.execute("INSERT INTO samples VALUES (?,?,?)", (now, topic, payload)); c.commit(); c.close()
 
@@ -69,6 +81,43 @@ def notify(text):
         if r.returncode: print("notify command failed:", (r.stderr or "").strip()[:200], flush=True)
     except Exception as e:
         print("notify command error:", type(e).__name__, flush=True)
+
+
+LEVEL_NAME = {1: "WARNING", 2: "CRITICAL"}
+
+
+def notify_async(text):
+    threading.Thread(target=notify, args=(text,), daemon=True).start()
+
+
+def heat_check(msg, now):
+    temps = msg.get("temp_c") or {}
+    for name, (warn, crit) in HEAT_RULES.items():
+        v = temps.get(name)
+        if v is None: continue
+        h = heat.setdefault(name, {"level": 0, "cand": 0, "since": now, "last_sent": 0.0})
+        cur = h["level"]
+        want = 2 if v >= crit else 1 if v >= warn else 0
+        if want < cur:                     # only step down once clearly below the current level's threshold
+            limit = (crit if cur == 2 else warn) - HEAT_HYST_C
+            if v >= limit: want = cur
+        if want != h["cand"]: h["cand"], h["since"] = want, now          # candidate level changed: restart the timer
+        short = name.replace("Max: ", "")
+        if want != cur and now - h["since"] >= HEAT_SUSTAIN_S:
+            h["level"], h["last_sent"] = want, now
+            if want > cur:
+                lim = crit if want == 2 else warn
+                power = msg.get("power") or {}
+                extra = " USB bus %.1f V." % power["Charger vbus_V"] if "Charger vbus_V" in power else ""
+                notify_async("HEAT %s: %s is %.1f C (%s limit %d C) and has stayed there for over %s.%s" %
+                             (LEVEL_NAME[want], short, v, LEVEL_NAME[want].lower(), lim, human(HEAT_SUSTAIN_S), extra))
+            elif want == 0:
+                notify_async("HEAT cleared: %s is back to %.1f C." % (short, v))
+            else:
+                notify_async("HEAT eased to WARNING: %s is %.1f C (was critical)." % (short, v))
+        elif cur and want == cur and now - h["last_sent"] > HEAT_REPEAT_S[cur]:
+            h["last_sent"] = now
+            notify_async("STILL HOT (%s): %s is %.1f C." % (LEVEL_NAME[cur].lower(), short, v))
 
 
 def alert_loop():
@@ -126,6 +175,8 @@ def demo_loop():
                "pressure_kpa": 102.44 + 0.01 * math.sin(x / 90),
                "temp_c": {"gas gauge battery": 38.8 + math.sin(x / 120), "Max: TCC Temp Sensor2": 66 + 4 * math.sin(x / 45)},
                "power": {"Charger vbus_V": 4.7, "Charger vbat_V": 4.24, "Charger ibat_A": 1.2}}
+        if os.environ.get("HUB_DEMO_HEAT"):
+            msg["temp_c"]["gas gauge battery"] = 40.0 if x < 5 else 50.0 if x < 15 else 58.0 if x < 25 else 40.0
         state["status"], state["status_ts"] = "online", now
         pause = os.environ.get("HUB_DEMO_PAUSE")
         a, _, b = (pause or ":").partition(":")
@@ -191,6 +242,7 @@ def latest():
     age = (time.time() - row[0]) if row else None
     return {"status": state["status"], "status_age_s": round(time.time() - state["status_ts"], 1) if state["status_ts"] else None,
             "last_sample_age_s": round(age, 1) if age is not None else None, "samples_stored": n, "alert_since": alert["down_since"],
+            "heat": {k: v["level"] for k, v in heat.items() if v["level"]},
             "latest": json.loads(row[1]) if row else None}
 
 

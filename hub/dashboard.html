@@ -17,7 +17,7 @@ main{padding:16px;max-width:1100px;margin:auto}.range button{background:var(--ca
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
 footer{color:var(--mute);font-size:12px;padding:12px 16px 28px;text-align:center}
 </style></head><body>
-<header><h1>iPhone 6 Sensor Node</h1><span id="status" class="pill">...</span><span id="age" class="pill">...</span>
+<header><h1>iPhone 6 Sensor Node</h1><span id="status" class="pill">...</span><span id="age" class="pill">...</span><span id="heat" class="pill" style="display:none"></span>
 <span class="range" id="range"></span></header>
 <main><div class="cards" id="cards"></div><div id="charts"></div></main>
 <footer id="foot"></footer>
@@ -42,6 +42,8 @@ async function refresh(){
  try{const d=await J("/api/latest");const st=document.getElementById("status");
   const fresh=d.last_sample_age_s!=null&&d.last_sample_age_s<15;
   st.textContent=fresh?"online":(d.status==="online"?"online (no data)":"OFFLINE");st.className="pill "+(fresh?"ok":"bad");
+  const hot=Object.entries(d.heat||{});const hp=document.getElementById("heat");hp.style.display=hot.length?"inline-block":"none";
+  if(hot.length){const crit=hot.some(([k,v])=>v===2);hp.textContent=(crit?"HEAT CRITICAL: ":"HEAT WARNING: ")+hot.map(([k])=>k.replace("Max: ","")).join(", ");hp.className="pill "+(crit?"bad":"warn")}
   document.getElementById("age").textContent="last reading "+ago(d.last_sample_age_s)+" ago";
   document.getElementById("foot").textContent=d.samples_stored+" readings stored · broker status: "+d.status+" · refreshes every 5 s";
   const L=d.latest||{};const cards=document.getElementById("cards");cards.innerHTML="";
