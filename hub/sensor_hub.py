@@ -6,7 +6,7 @@
 Env: HUB_DB, HUB_BIND (default 127.0.0.1), HUB_PORT (8088), HUB_BROKER_HOST (127.0.0.1), HUB_RETENTION_DAYS (7)
 The dashboard is read-only and has no login: bind it to localhost / your tailnet address only.
 """
-import json, math, os, random, sqlite3, subprocess, sys, threading, time
+import json, math, os, random, shlex, sqlite3, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -16,6 +16,11 @@ PORT = int(os.environ.get("HUB_PORT", "8088"))
 BROKER = os.environ.get("HUB_BROKER_HOST", "127.0.0.1")
 KEEP_DAYS = float(os.environ.get("HUB_RETENTION_DAYS", "7"))
 DEMO = "--demo" in sys.argv
+NOTIFY_CMD = os.environ.get("HUB_NOTIFY_CMD", "")                      # e.g. /home/you/bin/notify-telegram ; empty = log only
+ALERT_AFTER = float(os.environ.get("HUB_ALERT_AFTER_S", "120"))        # seconds without a reading before "OFFLINE"
+ALERT_REPEAT_H = float(os.environ.get("HUB_ALERT_REPEAT_H", "6"))      # reminder interval while still offline
+NAME = os.environ.get("HUB_NODE_NAME", "iPhone sensor node")
+alert = {"down_since": None, "last_sent": 0.0}
 lock = threading.Lock()
 state = {"status": "unknown", "status_ts": 0.0, "last_state_ts": 0.0}
 
@@ -47,6 +52,47 @@ def store(topic, payload):
         state["last_state_ts"] = now
         with lock:
             c = db(); c.execute("INSERT INTO samples VALUES (?,?,?)", (now, topic, payload)); c.commit(); c.close()
+
+
+def human(sec):
+    sec = int(sec)
+    if sec < 90: return "%d s" % sec
+    if sec < 5400: return "%d min" % round(sec / 60)
+    return "%.1f h" % (sec / 3600)
+
+
+def notify(text):
+    print("ALERT:", text, flush=True)                                  # always lands in the journal
+    if not NOTIFY_CMD: return
+    try:
+        r = subprocess.run(shlex.split(NOTIFY_CMD) + [text], timeout=40, capture_output=True, text=True)
+        if r.returncode: print("notify command failed:", (r.stderr or "").strip()[:200], flush=True)
+    except Exception as e:
+        print("notify command error:", type(e).__name__, flush=True)
+
+
+def alert_loop():
+    """Tell the owner when readings stop, remind occasionally, and say when they return."""
+    # a hub restart must not look like a new outage: start from the newest stored reading
+    with lock:
+        c = db(); row = c.execute("SELECT MAX(ts) FROM samples").fetchone(); c.close()
+    if row and row[0] and not state["last_state_ts"]: state["last_state_ts"] = row[0]
+    time.sleep(float(os.environ.get("HUB_ALERT_GRACE_S","45")))                                                     # grace period after the hub starts
+    while True:
+        time.sleep(10)
+        last = state["last_state_ts"]
+        if not last: continue
+        age = time.time() - last
+        if age > ALERT_AFTER and alert["down_since"] is None:
+            alert["down_since"], alert["last_sent"] = last, time.time()
+            notify("OFFLINE: %s has sent no readings for %s (last at %s). Broker status: %s." %
+                   (NAME, human(age), time.strftime("%H:%M", time.localtime(last)), state["status"]))
+        elif age > ALERT_AFTER and time.time() - alert["last_sent"] > ALERT_REPEAT_H * 3600:
+            alert["last_sent"] = time.time()
+            notify("STILL OFFLINE: %s has been silent for %s." % (NAME, human(time.time() - alert["down_since"])))
+        elif age <= ALERT_AFTER and alert["down_since"] is not None:
+            notify("BACK ONLINE: %s is sending again after %s offline." % (NAME, human(time.time() - alert["down_since"])))
+            alert["down_since"] = None
 
 
 def prune_loop():
@@ -81,7 +127,10 @@ def demo_loop():
                "temp_c": {"gas gauge battery": 38.8 + math.sin(x / 120), "Max: TCC Temp Sensor2": 66 + 4 * math.sin(x / 45)},
                "power": {"Charger vbus_V": 4.7, "Charger vbat_V": 4.24, "Charger ibat_A": 1.2}}
         state["status"], state["status_ts"] = "online", now
-        store("sensors/iphone6/state", json.dumps(msg)); time.sleep(1)
+        pause = os.environ.get("HUB_DEMO_PAUSE")
+        a, _, b = (pause or ":").partition(":")
+        if not (pause and float(a) <= x < float(b)): store("sensors/iphone6/state", json.dumps(msg))
+        time.sleep(1)
 
 
 # ------------------------------------------------------------------ queries
@@ -141,7 +190,7 @@ def latest():
         n = c.execute("SELECT COUNT(*) FROM samples").fetchone()[0]; c.close()
     age = (time.time() - row[0]) if row else None
     return {"status": state["status"], "status_age_s": round(time.time() - state["status_ts"], 1) if state["status_ts"] else None,
-            "last_sample_age_s": round(age, 1) if age is not None else None, "samples_stored": n,
+            "last_sample_age_s": round(age, 1) if age is not None else None, "samples_stored": n, "alert_since": alert["down_since"],
             "latest": json.loads(row[1]) if row else None}
 
 
@@ -179,6 +228,7 @@ class H(BaseHTTPRequestHandler):
 def main():
     init_db()
     threading.Thread(target=prune_loop, daemon=True).start()
+    threading.Thread(target=alert_loop, daemon=True).start()
     threading.Thread(target=demo_loop if DEMO else mqtt_loop, daemon=True).start()
     binds = {BIND}
     srv = [ThreadingHTTPServer((b, PORT), H) for b in binds]

@@ -27,7 +27,8 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now sensor-hub
+systemctl enable sensor-hub
+systemctl restart sensor-hub   # restart (not just --now) so a re-run picks up new code and settings
 sleep 3
 echo "== service: $(systemctl is-active sensor-hub)"
 echo "== listening:"; ss -ltn | grep ':8088' || echo "NOT LISTENING (journalctl -u sensor-hub -n 20)"

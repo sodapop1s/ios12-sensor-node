@@ -53,6 +53,7 @@ Mosquitto 2.0.21 on Debian 13.**
 | Broker refuses anonymous or wrong logins | checked with a deliberately wrong login (CONNACK 5) |
 | Everything restarts after a reboot + re-jailbreak with no manual step | verified once (launchd jobs came up, ~3 min of data gap, no history lost) |
 | Sound level | works; **not yet verified to survive a reboot** (the program keeps publishing the rest if the mic is unavailable) |
+| Offline alert (Telegram) | tested end to end with the real phone: one OFFLINE message after about 2 minutes of silence, one BACK ONLINE message with the duration |
 | Power-loss recovery | **not automatic.** The phone is semi-tethered; see [`docs/POWER_LOSS.md`](docs/POWER_LOSS.md). The hardware part is untested. |
 | Other phones / iOS versions | not tested. The HID usage numbers are specific to what this phone reported. |
 
@@ -83,6 +84,21 @@ Mosquitto 2.0.21 on Debian 13.**
    `scripts/jetsam_patch.py` in ios12-tailscale does this: `--label com.local.sensors --mb 100`. It edits an Apple
    system file; read that repo's notes first. Needs a reboot, then re-jailbreak.
 7. **Sound level (optional)**: see [`docs/MIC_SETUP.md`](docs/MIC_SETUP.md). It needs a deliberate privacy exception.
+
+## Offline alerts (Telegram)
+
+`hub/sensor_hub.py` sends an alert when readings stop for `HUB_ALERT_AFTER_S` seconds (default 120), repeats every
+`HUB_ALERT_REPEAT_H` hours (default 6), and says when the node is back. It calls whatever command is in `HUB_NOTIFY_CMD`
+with the message as its last argument; the included `hub/notify_telegram.py` posts to a Telegram bot.
+
+1. In Telegram, talk to **@BotFather**, `/newbot`, and keep the **token** (a secret).
+2. On the server, copy `hub/notify_telegram.py` and `hub/telegram_setup.sh` to `~/sensor-hub/` and run
+   `ssh -t <server> 'bash ~/sensor-hub/telegram_setup.sh'`. It asks for the token (hidden), finds your chat id when you
+   message the bot, stores both in `~/.config/telegram-notify` (mode 600) and installs `~/bin/notify-telegram`.
+3. Re-run `hub/install-hub.sh`; it restarts the service with `HUB_NOTIFY_CMD` set.
+
+`notify-telegram "any text"` also works for any other job on the server. With no `HUB_NOTIFY_CMD` the alerts only go
+to the journal. The alert text contains no sensor values.
 
 ## Message format
 
