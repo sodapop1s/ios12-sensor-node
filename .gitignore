@@ -1,0 +1,7 @@
+work/
+*.log
+*.pyc
+__pycache__/
+*.db
+mqtt.pass
+config.json

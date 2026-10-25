@@ -1,0 +1,13 @@
+{
+  "host": "100.64.0.10",
+  "port": 1883,
+  "user": "iphone6",
+  "password_file": "/var/root/sensors/mqtt.pass",
+  "topic": "sensors/iphone6",
+  "client_id": "iphone6-sensors",
+  "interval": 1.0,
+  "sample_hz": 10,
+  "proxy_host": "127.0.0.1",
+  "proxy_port": 1055,
+  "mic": true
+}

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iPhone 6 Sensor Node</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2230;--mute:#6a7387;--line:#e3e6ec;--ok:#1a8f4c;--bad:#c0392b;--warn:#b7791f;--c1:#2f6fed;--c2:#e0662b;--c3:#2a9d8f;--c4:#9b59b6}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b2029;--ink:#e6e9ef;--mute:#9099ac;--line:#2a3140;--ok:#3ec97a;--bad:#ff6b5b;--warn:#e0b050;--c1:#6a9bff;--c2:#ff9a66;--c3:#4fd1c0;--c4:#c39bd3}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px;border-bottom:1px solid var(--line);background:var(--card)}
+h1{font-size:18px;margin:0;flex:1 1 auto}.pill{padding:3px 10px;border-radius:99px;font-size:13px;font-weight:600;border:1px solid var(--line)}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+main{padding:16px;max-width:1100px;margin:auto}.range button{background:var(--card);color:var(--ink);border:1px solid var(--line);padding:5px 10px;border-radius:8px;cursor:pointer}
+.range button.on{border-color:var(--c1);color:var(--c1);font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}.card .k{color:var(--mute);font-size:12px}.card .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.chart{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:12px 0}.chart h2{font-size:14px;margin:0 0 6px;display:flex;justify-content:space-between}
+.chart h2 span{color:var(--mute);font-weight:400;font-size:12px}canvas{width:100%;height:150px;display:block}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
+footer{color:var(--mute);font-size:12px;padding:12px 16px 28px;text-align:center}
+</style></head><body>
+<header><h1>iPhone 6 Sensor Node</h1><span id="status" class="pill">...</span><span id="age" class="pill">...</span>
+<span class="range" id="range"></span></header>
+<main><div class="cards" id="cards"></div><div id="charts"></div></main>
+<footer id="foot"></footer>
+<script>
+const RANGES=[["1 h",1],["6 h",6],["24 h",24],["7 d",168]];let hours=1;
+const CHARTS=[
+ {t:"Temperatures (°C)",m:["temp_c.gas gauge battery","temp_c.Max: TCC Temp Sensor2","temp_c.Max: PMGR SOC Die Temp Sensor0","temp_c.Charger tjunc"]},
+ {t:"Barometric pressure (kPa)",m:["pressure_kpa"]},
+ {t:"Vibration (g, RMS deviation)",m:["accel_rms_dev_g"]},
+ {t:"Light (ALS channel 0)",m:["als.0"]},
+ {t:"Sound level (dBFS, 0 = full scale)",m:["sound.rms_dbfs","sound.peak_dbfs"]},
+ {t:"Battery / charger (V)",m:["power.Charger vbat_V","power.Charger vbus_V"]}];
+const COL=["--c1","--c2","--c3","--c4"];const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function el(t,c,h){const e=document.createElement(t);if(c)e.className=c;if(h!==undefined)e.innerHTML=h;return e}
+const rb=document.getElementById("range");RANGES.forEach(([l,h])=>{const b=el("button",h===hours?"on":"",l);b.onclick=()=>{hours=h;[...rb.children].forEach(x=>x.classList.remove("on"));b.classList.add("on");drawAll()};rb.appendChild(b)});
+const chartsEl=document.getElementById("charts");
+const boxes=CHARTS.map(c=>{const box=el("div","chart");const h=el("h2","",`<b>${c.t}</b><span></span>`);const cv=el("canvas");const lg=el("div","legend");box.append(h,cv,lg);chartsEl.appendChild(box);return {c,box,cv,lg,h}});
+function fmt(v,d=2){return v==null?"–":(+v).toFixed(d)}
+function ago(s){if(s==null)return"never";if(s<90)return Math.round(s)+" s";if(s<5400)return Math.round(s/60)+" min";return(s/3600).toFixed(1)+" h"}
+async function J(u){const r=await fetch(u);return r.json()}
+async function refresh(){
+ try{const d=await J("/api/latest");const st=document.getElementById("status");
+  const fresh=d.last_sample_age_s!=null&&d.last_sample_age_s<15;
+  st.textContent=fresh?"online":(d.status==="online"?"online (no data)":"OFFLINE");st.className="pill "+(fresh?"ok":"bad");
+  document.getElementById("age").textContent="last reading "+ago(d.last_sample_age_s)+" ago";
+  document.getElementById("foot").textContent=d.samples_stored+" readings stored · broker status: "+d.status+" · refreshes every 5 s";
+  const L=d.latest||{};const cards=document.getElementById("cards");cards.innerHTML="";
+  const add=(k,v,u="")=>cards.appendChild(el("div","card",`<div class="k">${k}</div><div class="v">${v}${u?` <small>${u}</small>`:""}</div>`));
+  if(L.accel_g)add("Accelerometer (g)",L.accel_g.map(x=>fmt(x,2)).join(" · "));
+  add("Vibration",fmt(L.accel_rms_dev_g*1000,2),"mg rms");if(L.sound)add("Sound",fmt(L.sound.rms_dbfs,1),"dBFS");add("Pressure",fmt(L.pressure_kpa,2),"kPa");
+  if(L.als)add("Light",fmt(L.als[0],0),"(ALS)");if(L.mag)add("Magnetometer",L.mag.map(x=>fmt(x,0)).join(" · "));
+  if(L.gyro)add("Gyro",L.gyro.map(x=>fmt(x,1)).join(" · "));
+  if(L.temp_c)for(const[k,v]of Object.entries(L.temp_c))add(k.replace("Max: ",""),fmt(v,1),"°C");
+  if(L.power){add("Battery",fmt(L.power["Charger vbat_V"],2),"V");add("USB bus",fmt(L.power["Charger vbus_V"],2),"V")}
+ }catch(e){document.getElementById("status").textContent="hub unreachable";document.getElementById("status").className="pill bad"}
+ drawAll()}
+async function drawAll(){for(const b of boxes){try{
+ const all=await Promise.all(b.c.m.map(m=>J(`/api/series?metric=${encodeURIComponent(m)}&hours=${hours}&points=300`)));
+ draw(b,all)}catch(e){}}}
+function draw(b,all){const cv=b.cv,dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
+ const x=cv.getContext("2d");x.scale(dpr,dpr);x.clearRect(0,0,W,H);
+ const pts=all.flat();b.lg.innerHTML="";if(!pts.length){x.fillStyle=css("--mute");x.fillText("no data in this range yet",10,20);return}
+ const t0=Math.min(...pts.map(p=>p[0])),t1=Math.max(...pts.map(p=>p[0]),t0+1);let lo=Math.min(...pts.map(p=>p[2])),hi=Math.max(...pts.map(p=>p[3]));
+ if(hi-lo<1e-9){lo-=1;hi+=1}const pad=(hi-lo)*0.08;lo-=pad;hi+=pad;const L=44,R=6,T=6,B=18;
+ const X=t=>L+(t-t0)/(t1-t0)*(W-L-R),Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+ x.strokeStyle=css("--line");x.fillStyle=css("--mute");x.font="11px system-ui";x.lineWidth=1;
+ for(let i=0;i<=3;i++){const v=lo+(hi-lo)*i/3,y=Y(v);x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(v.toFixed(Math.abs(hi-lo)<2?3:1),2,y+4)}
+ const f=t=>{const d=new Date(t*1000);return hours>=24?d.toLocaleDateString([], {month:"short",day:"numeric"})+" "+d.getHours()+"h":d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})};
+ x.fillText(f(t0),L,H-3);const e=f(t1);x.fillText(e,W-R-x.measureText(e).width,H-3);
+ all.forEach((s,i)=>{if(!s.length)return;const c=css(COL[i%4]);
+  x.fillStyle=c;x.globalAlpha=0.15;x.beginPath();s.forEach((p,j)=>j?x.lineTo(X(p[0]),Y(p[3])):x.moveTo(X(p[0]),Y(p[3])));[...s].reverse().forEach(p=>x.lineTo(X(p[0]),Y(p[2])));x.closePath();x.fill();x.globalAlpha=1;
+  x.strokeStyle=c;x.lineWidth=1.8;x.beginPath();s.forEach((p,j)=>j?x.lineTo(X(p[0]),Y(p[1])):x.moveTo(X(p[0]),Y(p[1])));x.stroke();
+  const last=s[s.length-1][1];b.lg.appendChild(el("span","",`<i style="background:${c}"></i>${b.c.m[i].split(".").slice(1).join(".").replace("Max: ","")||b.c.m[i]} <b>${last.toFixed(Math.abs(hi-lo)<2?3:1)}</b>`))});
+ b.h.querySelector("span").textContent="avg line, min–max band"}
+refresh();setInterval(refresh,5000);window.addEventListener("resize",drawAll);
+</script></body></html>
